@@ -6,3 +6,6 @@ authors = ["Grigory Avdyushin <avdyushin.g@gmail.com>"]
 [dependencies]
 bible-reference-rs = "0.1.0"
 postgres = "0.15"
+hyper = "0.12"
+futures = "0.1"
+url = "1.7.1"
