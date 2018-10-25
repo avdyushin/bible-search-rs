@@ -1,0 +1,8 @@
+[package]
+name = "bible-search-rs"
+version = "0.1.0"
+authors = ["Grigory Avdyushin <avdyushin.g@gmail.com>"]
+
+[dependencies]
+bible-reference-rs = "0.1.0"
+postgres = "0.15"
