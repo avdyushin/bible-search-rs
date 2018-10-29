@@ -9,6 +9,7 @@ use futures::future;
 use hyper::rt::Future;
 use hyper::service::{NewService, Service};
 use hyper::{Body, Error, Method, Request, Response, Server, StatusCode};
+use hyper::body::Payload;
 use models::*;
 use postgres::{Connection, TlsMode};
 use std::env;
@@ -25,7 +26,8 @@ impl SearchService {
             .into_owned()
             .collect::<HashMap<String, String>>();
 
-        args.get("q").map(|v| v.to_string())
+        args.get("q").map(|v| v.to_string()).filter(|s| !s.is_empty())
+        // TODO parse books
     }
 
     fn connect_db(&self) -> Option<Connection> {
@@ -36,16 +38,15 @@ impl SearchService {
             Ok(connection) => {
                 println!("Success");
                 Some(connection)
-            },
+            }
             Err(error) => {
                 println!("Error: {}", error);
                 None
-            },
+            }
         }
     }
 
     fn fetch_results(&self, db: Connection, query: Option<String>) -> String {
-
         let books = db
             .query("SELECT id, book, alt, abbr FROM rst_bible_books", &[])
             .unwrap();
@@ -66,6 +67,10 @@ impl SearchService {
     // Verse Of the Day
     fn vod_response(&self) -> Body {
         Body::from("Gen 1:1")
+    }
+
+    fn search_response(&self, query: String) -> Body {
+        Body::from(format!("Results for {:?}", query))
     }
 }
 
@@ -89,7 +94,6 @@ impl Service for SearchService {
     type Future = Box<Future<Item = Response<Self::ResBody>, Error = Self::Error> + Send>;
 
     fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
-
         println!("Got request: {:?}", request);
 
         let db = match self.connect_db() {
@@ -97,7 +101,7 @@ impl Service for SearchService {
             None => {
                 println!("Error getting DB connection");
                 None
-            },
+            }
         };
 
         let mut response = Response::new(Body::empty());
@@ -105,17 +109,17 @@ impl Service for SearchService {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => match request.uri().query() {
                 Some(query) => match self.parse_query(query) {
-                    Some(query) => *response.body_mut() = Body::from(format!("ask? {:?}", query)),
+                    Some(query) => *response.body_mut() = self.search_response(query),
                     None => *response.body_mut() = self.vod_response(),
                 },
                 None => *response.body_mut() = self.vod_response(),
             },
             (&Method::POST, "/") => {
-                //if request.body() == Body::empty() {
-                //    *response.body_mut() = self.vod_response();
-                //} else {
+                if request.body().content_length().unwrap_or(0) == 0 {
+                    *response.body_mut() = self.vod_response();
+                } else {
                     *response.body_mut() = request.into_body();
-                //}
+                }
             }
             _ => {
                 *response.status_mut() = StatusCode::NOT_FOUND;
@@ -127,7 +131,6 @@ impl Service for SearchService {
 }
 
 fn main() {
-
     let addr = "127.0.0.1:8080".parse().unwrap();
     let server = Server::bind(&addr)
         .serve(SearchService)
