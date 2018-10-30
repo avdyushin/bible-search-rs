@@ -5,11 +5,10 @@ extern crate postgres;
 extern crate url;
 
 mod models;
-use futures::future;
-use hyper::rt::Future;
+use futures::future::{Future, FutureResult};
+use hyper::body::Payload;
 use hyper::service::{NewService, Service};
 use hyper::{Body, Error, Method, Request, Response, Server, StatusCode};
-use hyper::body::Payload;
 use models::*;
 use postgres::{Connection, TlsMode};
 use std::env;
@@ -19,17 +18,6 @@ const DEFAULT_URL: &'static str = "postgres://docker:docker@localhost:5432/bible
 struct SearchService;
 
 impl SearchService {
-    fn parse_query(&self, query: &str) -> Option<String> {
-        use std::collections::HashMap;
-
-        let args = url::form_urlencoded::parse(&query.as_bytes())
-            .into_owned()
-            .collect::<HashMap<String, String>>();
-
-        args.get("q").map(|v| v.to_string()).filter(|s| !s.is_empty())
-        // TODO parse books
-    }
-
     fn connect_db(&self) -> Option<Connection> {
         let url = env::var("DATABASE_URL").unwrap_or(String::from(DEFAULT_URL));
 
@@ -68,9 +56,49 @@ impl SearchService {
     fn vod_response(&self) -> Body {
         Body::from("Gen 1:1")
     }
+}
 
-    fn search_response(&self, query: String) -> Body {
-        Body::from(format!("Results for {:?}", query))
+fn parse_query(query: Option<&str>) -> FutureResult<String, Error> {
+    use std::collections::HashMap;
+
+    let query = &query.unwrap_or("");
+    let args = url::form_urlencoded::parse(&query.as_bytes())
+        .into_owned()
+        .collect::<HashMap<String, String>>();
+
+    match args
+        .get("q")
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty())
+    {
+        Some(value) => futures::future::ok(value),
+        // TODO: Throw error
+        None => futures::future::ok(String::from("error")),
+    }
+}
+
+fn parse_body(body: Body) -> FutureResult<String, Error> {
+    if body.content_length().unwrap_or(0) == 0 {
+        // TODO: Throw error
+        futures::future::ok(String::from("empty"))
+    } else {
+        // TODO: Extract body string value
+        futures::future::ok(String::from("que"))
+    }
+}
+
+fn search_results(query: String) -> FutureResult<Body, Error> {
+    // TODO: Parse query into searches
+    futures::future::ok(Body::from(format!("Results for {:?}", query)))
+}
+
+// TODO: Find results function
+
+fn search_response(body: Result<Body, Error>) -> FutureResult<Response<Body>, Error> {
+    match body {
+        Ok(body) => futures::future::ok(Response::new(body)),
+        // TODO: Show empty results
+        Err(err) => futures::future::ok(Response::new(Body::from("OK"))),
     }
 }
 
@@ -83,7 +111,7 @@ impl NewService for SearchService {
     type InitError = Error;
 
     fn new_service(&self) -> Self::Future {
-        Box::new(future::ok(SearchService))
+        Box::new(futures::future::ok(SearchService))
     }
 }
 
@@ -104,29 +132,24 @@ impl Service for SearchService {
             }
         };
 
-        let mut response = Response::new(Body::empty());
-
         match (request.method(), request.uri().path()) {
-            (&Method::GET, "/") => match request.uri().query() {
-                Some(query) => match self.parse_query(query) {
-                    Some(query) => *response.body_mut() = self.search_response(query),
-                    None => *response.body_mut() = self.vod_response(),
-                },
-                None => *response.body_mut() = self.vod_response(),
-            },
-            (&Method::POST, "/") => {
-                if request.body().content_length().unwrap_or(0) == 0 {
-                    *response.body_mut() = self.vod_response();
-                } else {
-                    *response.body_mut() = request.into_body();
-                }
-            }
-            _ => {
-                *response.status_mut() = StatusCode::NOT_FOUND;
-            }
-        };
-
-        Box::new(future::ok(response))
+            (&Method::GET, "/") => Box::new(
+                parse_query(request.uri().query())
+                    .and_then(search_results)
+                    .then(search_response),
+            ),
+            (&Method::POST, "/") => Box::new(
+                parse_body(request.into_body())
+                    .and_then(search_results)
+                    .then(search_response),
+            ),
+            _ => Box::new(futures::future::ok(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::empty())
+                    .unwrap(),
+            )),
+        }
     }
 }
 
