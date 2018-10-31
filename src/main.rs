@@ -11,6 +11,7 @@ extern crate serde;
 extern crate serde_json;
 
 mod models;
+use bible_reference_rs::*;
 use futures::future::{Future, FutureResult};
 use hyper::service::{NewService, Service};
 use hyper::{header, Body, Method, Request, Response, Server, StatusCode};
@@ -19,60 +20,64 @@ use postgres::{Connection, TlsMode};
 use std::env;
 use std::fmt;
 
-const DEFAULT_URL: &'static str = "postgres://docker:docker@localhost:5432/bibles";
+const DEFAULT_URL: &'static str = "postgres://docker:docker@localhost:5432/bible";
 
 #[derive(Debug)]
 enum ServiceError {
     NoInput,
+    NoDatabaseConnection(String),
 }
 impl std::error::Error for ServiceError {}
 impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error")
+        match self {
+            ServiceError::NoInput => write!(f, "No input provided"),
+            ServiceError::NoDatabaseConnection(details) => write!(f, "DB: {}", details),
+        }
     }
 }
 
-struct SearchService;
+fn connect_db() -> Result<Connection, ServiceError> {
+    let url = env::var("DATABASE_URL").unwrap_or(String::from(DEFAULT_URL));
 
-impl SearchService {
-    fn connect_db(&self) -> Option<Connection> {
-        let url = env::var("DATABASE_URL").unwrap_or(String::from(DEFAULT_URL));
-
-        println!("Connecting: {}", &url);
-        match Connection::connect(url, TlsMode::None) {
-            Ok(connection) => {
-                println!("Success");
-                Some(connection)
-            }
-            Err(error) => {
-                println!("Error: {}", error);
-                None
-            }
+    println!("Connecting: {}", &url);
+    match Connection::connect(url, TlsMode::None) {
+        Ok(connection) => Ok(connection),
+        Err(error) => {
+            println!("Connection: {}", error);
+            Err(ServiceError::NoDatabaseConnection(format!("{}", error)))
         }
     }
+}
 
-    fn fetch_results(&self, db: Connection, query: Option<String>) -> String {
-        let books = db
-            .query("SELECT id, book, alt, abbr FROM rst_bible_books", &[])
-            .unwrap();
+// TODO: Find results function
 
-        for row in &books {
-            let book = Book {
-                id: row.get(0),
-                book: row.get(1),
-                alt: row.get(2),
-                abbr: row.get(3),
-            };
-            println!("{:?}", book);
-        }
+fn fetch_results(connection: Connection, refs: Vec<BibleReference>) -> String {
+    let books = connection
+        .query("SELECT id, book, alt, abbr FROM rst_bible_books", &[])
+        .unwrap();
 
-        String::from("OK")
+    for row in &books {
+        let book = Book {
+            id: row.get(0),
+            book: row.get(1),
+            alt: row.get(2),
+            abbr: row.get(3),
+        };
+        println!("{:?}", book);
     }
+
+    String::from("OK")
 }
 
 // Verse Of the Day
 fn vod_response_body() -> Body {
-    Body::from("Gen 1:1")
+    // TODO: Fetch verses of the day refs
+    // TODO: Fetch texts
+    let results = json!({
+        "results": "Verse of The Day: Gen 1:1"
+    });
+    Body::from(results.to_string())
 }
 
 fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
@@ -107,8 +112,6 @@ fn search_results(query: String) -> FutureResult<Body, ServiceError> {
     }
 }
 
-// TODO: Find results function
-
 fn search_response(body: Result<Body, ServiceError>) -> FutureResult<Response<Body>, ServiceError> {
     let body = match body {
         Ok(body) => body,
@@ -121,6 +124,8 @@ fn search_response(body: Result<Body, ServiceError>) -> FutureResult<Response<Bo
             .unwrap(),
     )
 }
+
+struct SearchService;
 
 impl NewService for SearchService {
     type ReqBody = Body;
@@ -144,11 +149,15 @@ impl Service for SearchService {
     fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
         println!("Got request: {:?}", request);
 
-        let db = match self.connect_db() {
-            Some(db) => Some(db),
-            None => {
-                println!("Error getting DB connection");
-                None
+        let db_connection = match connect_db() {
+            Ok(db) => db,
+            Err(err) => {
+                return Box::new(futures::future::ok(
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap(),
+                ))
             }
         };
 
