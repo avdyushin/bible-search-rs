@@ -4,12 +4,16 @@ extern crate hyper;
 extern crate postgres;
 extern crate url;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+#[macro_use]
+extern crate serde_json;
+
 mod models;
 use futures::future::{Future, FutureResult};
-use futures::stream::Stream;
-use hyper::body::Payload;
 use hyper::service::{NewService, Service};
-use hyper::{Body, Chunk, Method, Request, Response, Server, StatusCode};
+use hyper::{header, Body, Method, Request, Response, Server, StatusCode};
 use models::*;
 use postgres::{Connection, TlsMode};
 use std::env;
@@ -19,7 +23,7 @@ const DEFAULT_URL: &'static str = "postgres://docker:docker@localhost:5432/bible
 
 #[derive(Debug)]
 enum ServiceError {
-    NoInput
+    NoInput,
 }
 impl std::error::Error for ServiceError {}
 impl fmt::Display for ServiceError {
@@ -64,7 +68,6 @@ impl SearchService {
 
         String::from("OK")
     }
-
 }
 
 // Verse Of the Day
@@ -90,28 +93,33 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
     }
 }
 
-fn parse_body(body: Body) -> FutureResult<String, ServiceError> {
-    match body.content_length().unwrap_or(0) {
-        0 => futures::future::err(ServiceError::NoInput),
-        // TODO: Extract body string value
-        _ => {
-            futures::future::ok(String::from("cc"))
-        },
-    }
-}
-
 fn search_results(query: String) -> FutureResult<Body, ServiceError> {
-    // TODO: Parse query into searches
-    futures::future::ok(Body::from(format!("Results for {:?}", query)))
+    let refs = bible_reference_rs::parse(query.as_str());
+    if refs.is_empty() {
+        let empty = json!({});
+        futures::future::ok(Body::from(empty.to_string()))
+    } else {
+        let results = json!({
+            "query": query,
+            "results": format!("{:?}", refs)
+        });
+        futures::future::ok(Body::from(results.to_string()))
+    }
 }
 
 // TODO: Find results function
 
 fn search_response(body: Result<Body, ServiceError>) -> FutureResult<Response<Body>, ServiceError> {
-    match body {
-        Ok(body) => futures::future::ok(Response::new(body)),
-        Err(err) => futures::future::ok(Response::new(vod_response_body())),
-    }
+    let body = match body {
+        Ok(body) => body,
+        Err(_) => vod_response_body(),
+    };
+    futures::future::ok(
+        Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap(),
+    )
 }
 
 impl NewService for SearchService {
@@ -147,11 +155,6 @@ impl Service for SearchService {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => Box::new(
                 parse_query(request.uri().query())
-                    .and_then(search_results)
-                    .then(search_response),
-            ),
-            (&Method::POST, "/") => Box::new(
-                parse_body(request.into_body())
                     .and_then(search_results)
                     .then(search_response),
             ),
