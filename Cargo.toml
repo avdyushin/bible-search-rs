@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Grigory Avdyushin <avdyushin.g@gmail.com>"]
 
 [dependencies]
-bible-reference-rs = "0.1.0"
+bible-reference-rs = "0.1.1"
 postgres = "0.15"
 hyper = "0.12.13"
 futures = "0.1.21"
