@@ -88,8 +88,12 @@ fn fetch_daily_verses(db_connection: &Connection) -> Vec<String> {
 }
 
 // Verse Of the Day
-fn vod_response_body() -> Body {
+fn vod_response_body(db_connection: &Connection) -> Body {
     // TODO: Fetch texts
+    let daily = fetch_daily_verses(&db_connection);
+    for verses in &daily {
+        println!("Daily: {}", verses)
+    }
     let results = json!({
         "results": "Verse of The Day: Gen 1:1"
     });
@@ -114,30 +118,29 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
     }
 }
 
-fn search_results(query: String, db_connection: &Connection) -> FutureResult<Body, ServiceError> {
-    let daily = fetch_daily_verses(&db_connection);
-    for verses in &daily {
-        println!("Daily: {}", verses)
-    }
-
-    let refs = bible_reference_rs::parse(query.as_str());
-    if refs.is_empty() {
-        let empty = json!({});
-        futures::future::ok(Body::from(empty.to_string()))
-    } else {
-        let results = json!({
-            "query": query,
-            "results": format!("{:?}", refs)
-        });
-        futures::future::ok(Body::from(results.to_string()))
+fn search_results(
+    query: Result<String, ServiceError>,
+    db_connection: &Connection,
+) -> FutureResult<Body, ServiceError> {
+    match query {
+        Ok(query) => {
+            let refs = bible_reference_rs::parse(query.as_str());
+            if refs.is_empty() {
+                let empty = json!({});
+                futures::future::ok(Body::from(empty.to_string()))
+            } else {
+                let results = json!({
+                    "query": query,
+                    "results": format!("{:?}", refs)
+                });
+                futures::future::ok(Body::from(results.to_string()))
+            }
+        }
+        _ => futures::future::ok(vod_response_body(&db_connection)),
     }
 }
 
-fn search_response(body: Result<Body, ServiceError>) -> FutureResult<Response<Body>, ServiceError> {
-    let body = match body {
-        Ok(body) => body,
-        Err(_) => vod_response_body(),
-    };
+fn search_response(body: Body) -> FutureResult<Response<Body>, ServiceError> {
     futures::future::ok(
         Response::builder()
             .header(header::CONTENT_TYPE, "application/json")
@@ -185,8 +188,8 @@ impl Service for SearchService {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => Box::new(
                 parse_query(request.uri().query())
-                    .and_then(move |query| search_results(query, &db_connection))
-                    .then(search_response),
+                    .then(move |query| search_results(query, &db_connection))
+                    .and_then(search_response),
             ),
             _ => Box::new(futures::future::ok(
                 Response::builder()
