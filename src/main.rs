@@ -5,15 +5,14 @@ extern crate hyper;
 extern crate postgres;
 extern crate url;
 
-#[macro_use]
-extern crate serde_derive;
+//#[macro_use]
+//extern crate serde_derive;
 extern crate serde;
 #[macro_use]
 extern crate serde_json;
 
 mod models;
 use bible_reference_rs::*;
-use chrono::{Datelike, Utc};
 use futures::future::{Future, FutureResult};
 use hyper::service::{NewService, Service};
 use hyper::{header, Body, Method, Request, Response, Server, StatusCode};
@@ -54,7 +53,10 @@ fn connect_db() -> Result<Connection, ServiceError> {
 
 // TODO: Find results function
 
+#[allow(dead_code)]
 fn fetch_results(connection: Connection, refs: Vec<BibleReference>) -> String {
+    println!("Fetch for {:?}", refs);
+
     let books = connection
         .query("SELECT id, book, alt, abbr FROM rst_bible_books", &[])
         .unwrap();
@@ -72,32 +74,20 @@ fn fetch_results(connection: Connection, refs: Vec<BibleReference>) -> String {
     String::from("OK")
 }
 
-fn fetch_daily_verses(db_connection: &Connection) -> Vec<String> {
+fn fetch_daily_verses(db: &Connection) -> Vec<String> {
+    use chrono::{Datelike, Utc};
+
     let now = Utc::now();
     let month = now.month() as i16;
     let day = now.day() as i16;
 
-    db_connection
-        .query(
-            "SELECT verses FROM rst_bible_daily WHERE month = $1 AND day = $2",
-            &[&month, &day],
-        ).unwrap()
-        .iter()
-        .map(|row| row.get(0))
-        .collect()
-}
-
-// Verse Of the Day
-fn vod_response_body(db_connection: &Connection) -> Body {
-    // TODO: Fetch texts
-    let daily = fetch_daily_verses(&db_connection);
-    for verses in &daily {
-        println!("Daily: {}", verses)
-    }
-    let results = json!({
-        "results": "Verse of The Day: Gen 1:1"
-    });
-    Body::from(results.to_string())
+    db.query(
+        "SELECT verses FROM rst_bible_daily WHERE month = $1 AND day = $2",
+        &[&month, &day],
+    ).unwrap()
+    .iter()
+    .map(|row| row.get(0))
+    .collect()
 }
 
 fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
@@ -118,9 +108,22 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
     }
 }
 
+// Verse Of the Day
+fn vod_response_body(db: &Connection) -> Body {
+    // TODO: Fetch texts
+    let daily = fetch_daily_verses(&db);
+    for verses in &daily {
+        println!("Daily: {}", verses)
+    }
+    let results = json!({
+        "results": "Verse of The Day: Gen 1:1"
+    });
+    Body::from(results.to_string())
+}
+
 fn search_results(
     query: Result<String, ServiceError>,
-    db_connection: &Connection,
+    db: &Connection,
 ) -> FutureResult<Body, ServiceError> {
     match query {
         Ok(query) => {
@@ -136,7 +139,7 @@ fn search_results(
                 futures::future::ok(Body::from(results.to_string()))
             }
         }
-        _ => futures::future::ok(vod_response_body(&db_connection)),
+        _ => futures::future::ok(vod_response_body(&db)),
     }
 }
 
@@ -171,8 +174,6 @@ impl Service for SearchService {
     type Future = Box<Future<Item = Response<Self::ResBody>, Error = Self::Error> + Send>;
 
     fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
-        println!("Got request: {:?}", request);
-
         let db_connection = match connect_db() {
             Ok(db) => db,
             Err(_) => {
@@ -205,7 +206,7 @@ fn main() {
     let addr = "127.0.0.1:8080".parse().unwrap();
     let server = Server::bind(&addr)
         .serve(SearchService)
-        .map_err(|e| eprintln!("server error: {}", e));
+        .map_err(|e| eprintln!("Server error: {}", e));
 
     println!("Listening {}", addr);
     hyper::rt::run(server);
