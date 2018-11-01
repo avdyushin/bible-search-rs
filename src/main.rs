@@ -1,4 +1,5 @@
 extern crate bible_reference_rs;
+extern crate chrono;
 extern crate futures;
 extern crate hyper;
 extern crate postgres;
@@ -12,6 +13,7 @@ extern crate serde_json;
 
 mod models;
 use bible_reference_rs::*;
+use chrono::{Datelike, Utc};
 use futures::future::{Future, FutureResult};
 use hyper::service::{NewService, Service};
 use hyper::{header, Body, Method, Request, Response, Server, StatusCode};
@@ -70,9 +72,23 @@ fn fetch_results(connection: Connection, refs: Vec<BibleReference>) -> String {
     String::from("OK")
 }
 
+fn fetch_daily_verses(db_connection: &Connection) -> Vec<String> {
+    let now = Utc::now();
+    let month = now.month() as i16;
+    let day = now.day() as i16;
+
+    db_connection
+        .query(
+            "SELECT verses FROM rst_bible_daily WHERE month = $1 AND day = $2",
+            &[&month, &day],
+        ).unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
 // Verse Of the Day
 fn vod_response_body() -> Body {
-    // TODO: Fetch verses of the day refs
     // TODO: Fetch texts
     let results = json!({
         "results": "Verse of The Day: Gen 1:1"
@@ -98,7 +114,12 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
     }
 }
 
-fn search_results(query: String) -> FutureResult<Body, ServiceError> {
+fn search_results(query: String, db_connection: &Connection) -> FutureResult<Body, ServiceError> {
+    let daily = fetch_daily_verses(&db_connection);
+    for verses in &daily {
+        println!("Daily: {}", verses)
+    }
+
     let refs = bible_reference_rs::parse(query.as_str());
     if refs.is_empty() {
         let empty = json!({});
@@ -151,7 +172,7 @@ impl Service for SearchService {
 
         let db_connection = match connect_db() {
             Ok(db) => db,
-            Err(err) => {
+            Err(_) => {
                 return Box::new(futures::future::ok(
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -164,7 +185,7 @@ impl Service for SearchService {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => Box::new(
                 parse_query(request.uri().query())
-                    .and_then(search_results)
+                    .and_then(move |query| search_results(query, &db_connection))
                     .then(search_response),
             ),
             _ => Box::new(futures::future::ok(
