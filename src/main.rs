@@ -53,25 +53,78 @@ fn connect_db() -> Result<Connection, ServiceError> {
 
 // TODO: Find results function
 
-#[allow(dead_code)]
-fn fetch_results(connection: Connection, refs: Vec<BibleReference>) -> String {
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct Verse {
+    pub book_id: i16,
+    pub chapter: i16,
+    pub verse: i16,
+    pub text: String,
+}
+
+fn verses_in_chapter(db: &Connection, id: i16, chapter: i16) -> Vec<Verse> {
+    db.query(
+        "SELECT verse, text FROM rst_bible WHERE book_id = $1 AND chapter = $2",
+        &[&id, &chapter],
+    ).unwrap()
+    .iter()
+    .map(|row| Verse {
+        book_id: id,
+        chapter: chapter,
+        verse: row.get(0),
+        text: row.get(1),
+    }).collect()
+}
+
+fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
     println!("Fetch for {:?}", refs);
 
-    let books = connection
-        .query("SELECT id, book, alt, abbr FROM rst_bible_books", &[])
-        .unwrap();
+    let valid: Vec<BookRef> = refs
+        .iter()
+        .flat_map(|r| {
+            let statement = db
+                .prepare(
+                    "SELECT id, book as title, alt, abbr
+                     FROM rst_bible_books
+                     WHERE book ~* $1 OR alt ~* $1 OR abbr ~* $1
+                     LIMIT 1",
+                ).unwrap();
 
-    for row in &books {
-        let book = Book {
-            id: row.get(0),
-            book: row.get(1),
-            alt: row.get(2),
-            abbr: row.get(3),
-        };
-        println!("{:?}", book);
-    }
+            let rows = statement.query(&[&r.book]).unwrap();
+            if rows.is_empty() {
+                Err("ok")
+            } else {
+                let row = rows.iter().next().unwrap();
+                Ok(BookRef {
+                    id: row.get(0),
+                    locations: r.locations.clone(),
+                })
+            }
+        }).collect();
 
-    String::from("OK")
+    let flatten = valid
+        .into_iter()
+        .map(|reference| {
+            let book_id = reference.id;
+            reference.locations
+                .iter()
+                .flat_map(move |l| match (&l.chapters, &l.verses) {
+                    (chapters, None) if chapters.len() == 1 => {
+                        let ch = chapters[0] as i16;
+                        Some(verses_in_chapter(&db, book_id, ch))
+                    }
+                    (chapters, _verses) if chapters.len() == 1 => {
+                        println!("Verses set in chapter");
+                        None
+                    }
+                    _ => None,
+                }).collect::<Vec<_>>()
+        }).flatten().collect::<Vec<_>>();
+
+    println!("r {:?}", flatten);
+
+    let results = json!({ "results": format!("{:?}", refs) });
+
+    results.to_string()
 }
 
 fn fetch_daily_verses(db: &Connection) -> Vec<String> {
@@ -132,11 +185,7 @@ fn search_results(
                 let empty = json!({});
                 futures::future::ok(Body::from(empty.to_string()))
             } else {
-                let results = json!({
-                    "query": query,
-                    "results": format!("{:?}", refs)
-                });
-                futures::future::ok(Body::from(results.to_string()))
+                futures::future::ok(Body::from(fetch_results(&db, refs)))
             }
         }
         _ => futures::future::ok(vod_response_body(&db)),
@@ -210,4 +259,17 @@ fn main() {
 
     println!("Listening {}", addr);
     hyper::rt::run(server);
+}
+
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fetch_chapter() {
+        let db = connect_db().unwrap();
+        let refs = bible_reference_rs::parse("Быт 1");
+        fetch_results(&db, refs);
+    }
 }

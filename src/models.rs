@@ -1,7 +1,7 @@
+extern crate bible_reference_rs;
+
 #[derive(Debug)]
-pub struct Book {
+pub struct BookRef {
     pub id: i16,
-    pub book: String,
-    pub alt: String,
-    pub abbr: String,
+    pub locations: Vec<bible_reference_rs::VerseLocation>,
 }
