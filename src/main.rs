@@ -105,7 +105,8 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
         .into_iter()
         .map(|reference| {
             let book_id = reference.id;
-            reference.locations
+            reference
+                .locations
                 .iter()
                 .flat_map(move |l| match (&l.chapters, &l.verses) {
                     (chapters, None) if chapters.len() == 1 => {
@@ -118,7 +119,8 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
                     }
                     _ => None,
                 }).collect::<Vec<_>>()
-        }).flatten().collect::<Vec<_>>();
+        }).flatten()
+        .collect::<Vec<_>>();
 
     println!("r {:?}", flatten);
 
