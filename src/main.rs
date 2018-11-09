@@ -18,6 +18,7 @@ use hyper::service::{NewService, Service};
 use hyper::{header, Body, Method, Request, Response, Server, StatusCode};
 use models::*;
 use postgres::{Connection, TlsMode};
+use serde_json::Value;
 use std::env;
 use std::fmt;
 
@@ -61,18 +62,33 @@ pub struct Verse {
     pub text: String,
 }
 
-fn verses_in_chapter(db: &Connection, id: i16, chapter: i16) -> Vec<Verse> {
+fn verses_by_chapters(db: &Connection, id: i16, chapters: Vec<i16>) -> Vec<Value> {
     db.query(
-        "SELECT verse, text FROM rst_bible WHERE book_id = $1 AND chapter = $2",
-        &[&id, &chapter],
+        "SELECT row_to_json(rst_bible)
+         FROM rst_bible
+         WHERE book_id = $1 AND chapter = ANY($2)",
+        &[&id, &chapters],
     ).unwrap()
     .iter()
-    .map(|row| Verse {
-        book_id: id,
-        chapter: chapter,
-        verse: row.get(0),
-        text: row.get(1),
-    }).collect()
+    .map(|row| row.get(0))
+    .collect()
+}
+
+fn verses_in_chapter_by_verses(
+    db: &Connection,
+    id: i16,
+    chapter: i16,
+    verses: Vec<i16>,
+) -> Vec<Value> {
+    db.query(
+        "SELECT row_to_json(rst_bible)
+         FROM rst_bible
+         WHERE book_id = $1 AND chapter = $2 AND verse = ANY($3)",
+        &[&id, &chapter, &verses],
+    ).unwrap()
+    .iter()
+    .map(|row| row.get(0))
+    .collect()
 }
 
 fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
@@ -105,26 +121,29 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
         .into_iter()
         .map(|reference| {
             let book_id = reference.id;
-            reference
+            let texts = reference
                 .locations
                 .iter()
-                .flat_map(move |l| match (&l.chapters, &l.verses) {
-                    (chapters, None) if chapters.len() == 1 => {
-                        let ch = chapters[0] as i16;
-                        Some(verses_in_chapter(&db, book_id, ch))
-                    }
-                    (chapters, _verses) if chapters.len() == 1 => {
-                        println!("Verses set in chapter");
-                        None
-                    }
-                    _ => None,
-                }).collect::<Vec<_>>()
-        }).flatten()
-        .collect::<Vec<_>>();
+                .flat_map(
+                    move |location| match (&location.chapters, &location.verses) {
+                        // Fetch verses by chapters
+                        (chapters, None) => {
+                            let ch = chapters.into_iter().map(|v| *v as i16).collect();
+                            Some(verses_by_chapters(&db, book_id, ch))
+                        }
+                        // Fetch verses by chapter and verses
+                        (chapters, Some(verses)) if chapters.len() == 1 => {
+                            let ch = chapters[0] as i16;
+                            let vs = verses.into_iter().map(|v| *v as i16).collect();
+                            Some(verses_in_chapter_by_verses(&db, book_id, ch, vs))
+                        }
+                        _ => None,
+                    },
+                ).collect::<Vec<_>>();
+            json!({ "ref_for": book_id, "texts": texts })
+        }).collect::<Vec<_>>();
 
-    println!("r {:?}", flatten);
-
-    let results = json!({ "results": format!("{:?}", refs) });
+    let results = json!({ "results": flatten });
 
     results.to_string()
 }

@@ -5,7 +5,7 @@ authors = ["Grigory Avdyushin <avdyushin.g@gmail.com>"]
 
 [dependencies]
 bible-reference-rs = "0.1.2"
-postgres = "0.15"
+postgres = { version = "0.15", features = ["with-serde_json"] }
 hyper = "0.12.13"
 futures = "0.1.21"
 url = "1.7.1"
