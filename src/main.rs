@@ -52,16 +52,6 @@ fn connect_db() -> Result<Connection, ServiceError> {
     }
 }
 
-// TODO: Find results function
-
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct Verse {
-    pub book_id: i16,
-    pub chapter: i16,
-    pub verse: i16,
-    pub text: String,
-}
-
 fn verses_by_chapters(db: &Connection, id: i16, chapters: Vec<i16>) -> Vec<Value> {
     db.query(
         "SELECT row_to_json(rst_bible)
@@ -91,8 +81,12 @@ fn verses_in_chapter_by_verses(
     .collect()
 }
 
-fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
+fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
     println!("Fetch for {:?}", refs);
+
+    if refs.is_empty() {
+        return vec![];
+    }
 
     let valid: Vec<BookRef> = refs
         .iter()
@@ -117,8 +111,8 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
             }
         }).collect();
 
-    let flatten = valid
-        .into_iter()
+    let results = valid
+        .iter()
         .map(|reference| {
             let book_id = reference.id;
             let texts = reference
@@ -143,9 +137,7 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> String {
             json!({ "ref_for": book_id, "texts": texts })
         }).collect::<Vec<_>>();
 
-    let results = json!({ "results": flatten });
-
-    results.to_string()
+    results
 }
 
 fn fetch_daily_verses(db: &Connection) -> Vec<String> {
@@ -184,36 +176,30 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
 
 // Verse Of the Day
 fn vod_response_body(db: &Connection) -> Body {
-    // TODO: Fetch texts
-    let daily = fetch_daily_verses(&db);
-    for verses in &daily {
-        println!("Daily: {}", verses)
-    }
-    let results = json!({
-        "results": "Verse of The Day: Gen 1:1"
-    });
-    Body::from(results.to_string())
-}
-
-fn search_results(
-    query: Result<String, ServiceError>,
-    db: &Connection,
-) -> FutureResult<Body, ServiceError> {
-    match query {
-        Ok(query) => {
-            let refs = bible_reference_rs::parse(query.as_str());
-            if refs.is_empty() {
-                let empty = json!({});
-                futures::future::ok(Body::from(empty.to_string()))
+    let results = fetch_daily_verses(&db)
+        .into_iter()
+        .flat_map(|daily| {
+            let refs = bible_reference_rs::parse(daily.as_str());
+            let results = fetch_results(&db, refs);
+            if results.is_empty() {
+                None
             } else {
-                futures::future::ok(Body::from(fetch_results(&db, refs)))
+                Some(results)
             }
-        }
-        _ => futures::future::ok(vod_response_body(&db)),
-    }
+        }).flatten()
+        .collect::<Vec<_>>();
+
+    Body::from(json!({ "results": results }).to_string())
 }
 
-fn search_response(body: Body) -> FutureResult<Response<Body>, ServiceError> {
+fn search_results(query: String, db: &Connection) -> FutureResult<Body, ServiceError> {
+    let refs = bible_reference_rs::parse(query.as_str());
+    futures::future::ok(Body::from(
+        json!({ "results": fetch_results(&db, refs) }).to_string(),
+    ))
+}
+
+fn success_response(body: Body) -> FutureResult<Response<Body>, ServiceError> {
     futures::future::ok(
         Response::builder()
             .header(header::CONTENT_TYPE, "application/json")
@@ -259,9 +245,20 @@ impl Service for SearchService {
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => Box::new(
                 parse_query(request.uri().query())
-                    .then(move |query| search_results(query, &db_connection))
-                    .and_then(search_response),
+                    .and_then(move |query| search_results(query, &db_connection))
+                    .and_then(success_response)
+                    .or_else(|_| {
+                        futures::future::ok(
+                            Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                    }),
             ),
+            (&Method::GET, "/daily") => {
+                Box::new(success_response(vod_response_body(&db_connection)))
+            }
             _ => Box::new(futures::future::ok(
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
