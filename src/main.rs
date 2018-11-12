@@ -3,11 +3,8 @@ extern crate chrono;
 extern crate futures;
 extern crate hyper;
 extern crate postgres;
-extern crate url;
-
-//#[macro_use]
-//extern crate serde_derive;
 extern crate serde;
+extern crate url;
 #[macro_use]
 extern crate serde_json;
 
@@ -111,7 +108,7 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
             }
         }).collect();
 
-    let results = valid
+    valid
         .iter()
         .map(|reference| {
             let book_id = reference.id;
@@ -137,9 +134,7 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
                     },
                 ).collect::<Vec<_>>();
             json!({ "reference": { "title": book_title, "alt": book_alt }, "texts": texts })
-        }).collect::<Vec<_>>();
-
-    results
+        }).collect::<Vec<_>>()
 }
 
 fn fetch_daily_verses(db: &Connection) -> Vec<String> {
@@ -181,7 +176,7 @@ fn vod_response_body(db: &Connection) -> Body {
     let results = fetch_daily_verses(&db)
         .into_iter()
         .flat_map(|daily| {
-            let refs = bible_reference_rs::parse(daily.as_str());
+            let refs = parse(daily.as_str());
             let results = fetch_results(&db, refs);
             if results.is_empty() {
                 None
@@ -195,7 +190,7 @@ fn vod_response_body(db: &Connection) -> Body {
 }
 
 fn search_results(query: String, db: &Connection) -> FutureResult<Body, ServiceError> {
-    let refs = bible_reference_rs::parse(query.as_str());
+    let refs = parse(query.as_str());
     futures::future::ok(Body::from(
         json!({ "results": fetch_results(&db, refs) }).to_string(),
     ))
@@ -282,14 +277,13 @@ fn main() {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
     #[test]
     fn test_fetch_chapter() {
         let db = connect_db().unwrap();
-        let refs = bible_reference_rs::parse("Быт 1");
+        let refs = parse("Быт 1");
         let verses = fetch_results(&db, refs);
         assert_eq!(verses.len(), 1);
     }
