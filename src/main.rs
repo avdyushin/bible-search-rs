@@ -82,8 +82,6 @@ fn verses_in_chapter_by_verses(
 }
 
 fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
-    println!("Fetch for {:?}", refs);
-
     if refs.is_empty() {
         return vec![];
     }
@@ -101,11 +99,13 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
 
             let rows = statement.query(&[&r.book]).unwrap();
             if rows.is_empty() {
-                Err("ok")
+                None
             } else {
                 let row = rows.iter().next().unwrap();
-                Ok(BookRef {
+                Some(BookRef {
                     id: row.get(0),
+                    name: row.get(1),
+                    alt: row.get(2),
                     locations: r.locations.clone(),
                 })
             }
@@ -115,6 +115,8 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
         .iter()
         .map(|reference| {
             let book_id = reference.id;
+            let book_title = &reference.name;
+            let book_alt = &reference.alt;
             let texts = reference
                 .locations
                 .iter()
@@ -134,7 +136,7 @@ fn fetch_results(db: &Connection, refs: Vec<BibleReference>) -> Vec<Value> {
                         _ => None,
                     },
                 ).collect::<Vec<_>>();
-            json!({ "ref_for": book_id, "texts": texts })
+            json!({ "reference": { "title": book_title, "alt": book_alt }, "texts": texts })
         }).collect::<Vec<_>>();
 
     results
@@ -243,7 +245,7 @@ impl Service for SearchService {
         };
 
         match (request.method(), request.uri().path()) {
-            (&Method::GET, "/") => Box::new(
+            (&Method::GET, "/refs") => Box::new(
                 parse_query(request.uri().query())
                     .and_then(move |query| search_results(query, &db_connection))
                     .and_then(success_response)
@@ -288,6 +290,7 @@ mod tests {
     fn test_fetch_chapter() {
         let db = connect_db().unwrap();
         let refs = bible_reference_rs::parse("Быт 1");
-        fetch_results(&db, refs);
+        let verses = fetch_results(&db, refs);
+        assert_eq!(verses.len(), 1);
     }
 }
