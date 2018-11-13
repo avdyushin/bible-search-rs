@@ -145,7 +145,9 @@ fn fetch_daily_verses(db: &Connection) -> Vec<String> {
     let day = now.day() as i16;
 
     db.query(
-        "SELECT verses FROM rst_bible_daily WHERE month = $1 AND day = $2",
+        "SELECT verses
+         FROM rst_bible_daily
+         WHERE month = $1 AND day = $2",
         &[&month, &day],
     ).unwrap()
     .iter()
@@ -171,6 +173,33 @@ fn parse_query(query: Option<&str>) -> FutureResult<String, ServiceError> {
     }
 }
 
+#[derive(Debug)]
+struct SearchPaginate {
+    text: String,
+    page: i16,
+}
+
+fn parse_query_paginate(query: Option<&str>) -> FutureResult<SearchPaginate, ServiceError> {
+    use std::collections::HashMap;
+
+    let query = &query.unwrap_or("");
+    let args = url::form_urlencoded::parse(&query.as_bytes())
+        .into_owned()
+        .collect::<HashMap<String, String>>();
+
+    let q = args
+        .get("q")
+        .map(|v| v.to_string())
+        .filter(|s| !s.is_empty());
+
+    let p = args.get("p").map(|v| v.parse::<i16>().unwrap_or(1));
+
+    match (q, p) {
+        (Some(q), Some(p)) => futures::future::ok(SearchPaginate { text: q, page: p }),
+        _ => futures::future::err(ServiceError::NoInput),
+    }
+}
+
 // Verse Of the Day
 fn vod_response_body(db: &Connection) -> Body {
     let results = fetch_daily_verses(&db)
@@ -193,6 +222,51 @@ fn search_results(query: String, db: &Connection) -> FutureResult<Body, ServiceE
     let refs = parse(query.as_str());
     futures::future::ok(Body::from(
         json!({ "results": fetch_results(&db, refs) }).to_string(),
+    ))
+}
+
+fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>, i64) {
+    let count_rows = db
+        .query(
+            "SELECT COUNT(book_id)
+             FROM rst_bible
+             WHERE text ~* $1",
+            &[&text],
+        ).unwrap();
+
+    let mut total: i64 = 0;
+    if count_rows.is_empty() {
+        return (vec![json!([])], total);
+    } else {
+        total = count_rows.get(0).get("count");
+    }
+
+    let offset = ((page - 1) * 10) as i64;
+    let rows = db
+        .query(
+            "SELECT row_to_json(rst_bible)
+             FROM rst_bible
+             WHERE text ~* $1
+             LIMIT 10
+             OFFSET $2",
+            &[&text, &offset],
+        ).unwrap();
+
+    let results = rows.into_iter().map(|r| r.get(0)).collect::<Vec<Value>>();
+
+    println!("count {} {}", total, total / 10);
+    (vec![json!(results)], (total as f64 / 10_f64).ceil() as i64)
+}
+
+fn search_text(query: SearchPaginate, db: &Connection) -> FutureResult<Body, ServiceError> {
+    let text = &query.text;
+    let results = fetch_search_results(text.to_string(), query.page, db);
+
+    futures::future::ok(Body::from(
+        json!({
+            "meta": { "text": text, "page": query.page, "total": results.1 },
+            "results": results.0
+        }).to_string(),
     ))
 }
 
@@ -243,6 +317,19 @@ impl Service for SearchService {
             (&Method::GET, "/refs") => Box::new(
                 parse_query(request.uri().query())
                     .and_then(move |query| search_results(query, &db_connection))
+                    .and_then(success_response)
+                    .or_else(|_| {
+                        futures::future::ok(
+                            Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                    }),
+            ),
+            (&Method::GET, "/search") => Box::new(
+                parse_query_paginate(request.uri().query())
+                    .and_then(move |query| search_text(query, &db_connection))
                     .and_then(success_response)
                     .or_else(|_| {
                         futures::future::ok(
