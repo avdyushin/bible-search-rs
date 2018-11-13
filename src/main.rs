@@ -226,6 +226,8 @@ fn search_results(query: String, db: &Connection) -> FutureResult<Body, ServiceE
 }
 
 fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>, i64) {
+    let page = if page <= 0 { 1 } else { page };
+
     let count_rows = db
         .query(
             "SELECT COUNT(book_id)
@@ -254,7 +256,6 @@ fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>
 
     let results = rows.into_iter().map(|r| r.get(0)).collect::<Vec<Value>>();
 
-    println!("count {} {}", total, total / 10);
     (vec![json!(results)], (total as f64 / 10_f64).ceil() as i64)
 }
 
