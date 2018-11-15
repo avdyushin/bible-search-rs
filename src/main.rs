@@ -192,10 +192,10 @@ fn parse_query_paginate(query: Option<&str>) -> FutureResult<SearchPaginate, Ser
         .map(|v| v.to_string())
         .filter(|s| !s.is_empty());
 
-    let p = args.get("p").map(|v| v.parse::<i16>().unwrap_or(1));
+    let p = args.get("p").map(|v| v.parse::<i16>().unwrap_or(1)).unwrap_or(1);
 
     match (q, p) {
-        (Some(q), Some(p)) => futures::future::ok(SearchPaginate { text: q, page: p }),
+        (Some(q), p) => futures::future::ok(SearchPaginate { text: q, page: p }),
         _ => futures::future::err(ServiceError::NoInput),
     }
 }
@@ -246,9 +246,12 @@ fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>
     let offset = ((page - 1) * 10) as i64;
     let rows = db
         .query(
-            "SELECT row_to_json(rst_bible)
-             FROM rst_bible
-             WHERE text ~* $1
+            "SELECT row_to_json(t)
+             FROM (
+                SELECT v.book_id, v.text, v.chapter, v.verse, b.alt as book_alt from rst_bible v
+                LEFT OUTER JOIN rst_bible_books b on (v.book_id = b.id)
+                WHERE text ~* $1
+             ) t
              LIMIT 10
              OFFSET $2",
             &[&text, &offset],
@@ -275,6 +278,9 @@ fn success_response(body: Body) -> FutureResult<Response<Body>, ServiceError> {
     futures::future::ok(
         Response::builder()
             .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET")
+            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type")
             .body(body)
             .unwrap(),
     )
