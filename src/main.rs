@@ -251,7 +251,7 @@ fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>
         .query(
             "SELECT row_to_json(t)
              FROM (
-                SELECT v.book_id, v.text, v.chapter, v.verse, b.book as book_alt from rst_bible v
+                SELECT v.book_id, v.text, v.chapter, v.verse, b.book as book_name, b.alt as book_alt from rst_bible v
                 LEFT OUTER JOIN rst_bible_books b on (v.book_id = b.id)
                 WHERE text ~* $1
              ) t
