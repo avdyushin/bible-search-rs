@@ -192,7 +192,10 @@ fn parse_query_paginate(query: Option<&str>) -> FutureResult<SearchPaginate, Ser
         .map(|v| v.to_string())
         .filter(|s| !s.is_empty());
 
-    let p = args.get("p").map(|v| v.parse::<i16>().unwrap_or(1)).unwrap_or(1);
+    let p = args
+        .get("p")
+        .map(|v| v.parse::<i16>().unwrap_or(1))
+        .unwrap_or(1);
 
     match (q, p) {
         (Some(q), p) => futures::future::ok(SearchPaginate { text: q, page: p }),
@@ -248,7 +251,7 @@ fn fetch_search_results(text: String, page: i16, db: &Connection) -> (Vec<Value>
         .query(
             "SELECT row_to_json(t)
              FROM (
-                SELECT v.book_id, v.text, v.chapter, v.verse, b.alt as book_alt from rst_bible v
+                SELECT v.book_id, v.text, v.chapter, v.verse, b.book as book_alt from rst_bible v
                 LEFT OUTER JOIN rst_bible_books b on (v.book_id = b.id)
                 WHERE text ~* $1
              ) t
