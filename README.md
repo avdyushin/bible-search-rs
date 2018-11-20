@@ -1,4 +1,5 @@
 # Bible Microservice REST API in Rust
+## PoC stage
 
 Bible text, references and search as REST API microservice packed into Docker container.
 
